@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QThread, QRect, Signal
 from PySide6.QtGui import QAction, QImage, QPixmap, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -16,12 +17,16 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QLineEdit,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
     QRubberBand,
@@ -47,6 +52,7 @@ DEFAULT_CONFIG = {
     "post_url": "",
     "post_enabled": False,
     "actions_enabled": True,
+    "bindings": {},
 }
 
 
@@ -307,10 +313,14 @@ class VideoLabel(QLabel):
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, config, parent=None, cameras=None):
+    CUSTOM_KEY = "#custom"
+    CUSTOM_WIN = "#custom_win"
+
+    def __init__(self, config, parent=None, cameras=None, bindings=None):
         super().__init__(parent)
         self.setWindowTitle("Параметры")
         self.config = dict(config)
+        self.bindings = dict(bindings) if bindings else dict(ga.DEFAULT_BINDINGS)
 
         self.combo_camera = QComboBox()
         cam_list = list(cameras) if cameras else list(range(10))
@@ -352,6 +362,8 @@ class SettingsDialog(QDialog):
         )
         self.chk_actions.setChecked(bool(self.config.get("actions_enabled", True)))
 
+        self.tbl_bindings = self._build_bindings_table()
+
         form = QFormLayout()
         form.addRow("Камера:", self.combo_camera)
         form.addRow("Максимум рук:", self.spin_hands)
@@ -366,12 +378,95 @@ class SettingsDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel
         )
+
+        lbl_bindings = QLabel("Жесты и действия:")
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(lbl_bindings)
+        layout.addWidget(self.tbl_bindings)
+        layout.addWidget(buttons)
+
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(buttons)
+    def _build_bindings_table(self):
+        table = QTableWidget(len(ga.ALL_GESTURES), 2)
+        table.setHorizontalHeaderLabels(["Жест", "Действие"])
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        table.setColumnWidth(0, 230)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
+
+        for row, gesture in enumerate(ga.ALL_GESTURES):
+            item = QTableWidgetItem(gesture)
+            table.setItem(row, 0, item)
+            combo = self._make_action_combo(gesture)
+            table.setCellWidget(row, 1, combo)
+        return table
+
+    def _make_action_combo(self, gesture):
+        combo = QComboBox()
+        combo.addItem("Нет команды", "")
+        for spec, label in ga.COMMAND_CATALOG:
+            combo.addItem(label, spec)
+        combo.addItem("Своя клавиша (VK)…", self.CUSTOM_KEY)
+        combo.addItem("Win + клавиша (VK)…", self.CUSTOM_WIN)
+        spec = self.bindings.get(gesture, "")
+        self._select_spec(combo, spec)
+        combo.currentIndexChanged.connect(
+            lambda _ix, cb=combo, g=gesture: self._on_action_selected(cb, g)
+        )
+        return combo
+
+    @staticmethod
+    def _select_spec(combo, spec):
+        pos = combo.findData(spec)
+        if pos < 0 and spec:
+            combo.blockSignals(True)
+            combo.addItem(f"Своя: {spec}", spec)
+            pos = combo.count() - 1
+            combo.setCurrentIndex(pos)
+            combo.blockSignals(False)
+        elif pos >= 0:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(pos)
+            combo.blockSignals(False)
+
+    def _on_action_selected(self, combo, gesture):
+        data = combo.currentData()
+        if data in (None, ""):
+            self.bindings.pop(gesture, None)
+            return
+        if data in (self.CUSTOM_KEY, self.CUSTOM_WIN):
+            title = (
+                "Своя клавиша: VK-код"
+                if data == self.CUSTOM_KEY
+                else "Win + клавиша: VK-код"
+            )
+            text, ok = QInputDialog.getText(
+                self, title,
+                "Введите VK-код (например 0xB3 или 179):",
+            )
+            spec = ""
+            if ok:
+                try:
+                    vk = int(text.strip(), 0)
+                except ValueError:
+                    vk = 0
+                if 0 < vk < 256:
+                    spec = (
+                        f"key:{vk}" if data == self.CUSTOM_KEY else f"combo:{vk}"
+                    )
+            if spec:
+                self.bindings[gesture] = spec
+            else:
+                self.bindings.pop(gesture, None)
+            self._select_spec(combo, spec)
+            return
+        self.bindings[gesture] = data
 
     def result_config(self):
         return {
@@ -383,6 +478,7 @@ class SettingsDialog(QDialog):
             "post_url": self.edit_post_url.text().strip(),
             "post_enabled": self.chk_post.isChecked(),
             "actions_enabled": self.chk_actions.isChecked(),
+            "bindings": dict(self.bindings),
         }
 
 
@@ -400,10 +496,12 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print("Аудиоуправление недоступно:", e)
         self.keys = ga.KeyController()
-        self.mute_gate = ga.ActionGate(config["delay"])
-        self.media_gate = ga.ActionGate(config["delay"])
-        self.volume_gate = ga.ActionGate(config["delay"])
+        self.action_gate = ga.ActionGate(config["delay"])
         self.actions_enabled = bool(self.config.get("actions_enabled", True))
+        saved_bindings = self.config.get("bindings")
+        self.bindings = (
+            dict(saved_bindings) if saved_bindings else dict(ga.DEFAULT_BINDINGS)
+        )
 
         self.video = VideoLabel()
         self.video.zoneSelected.connect(self.on_zone_selected)
@@ -490,43 +588,20 @@ class MainWindow(QMainWindow):
 
     def apply_actions(self, hands, now):
         if not self.actions_enabled:
-            self.mute_gate.update(None, now)
-            self.volume_gate.update(None, now)
-            self.media_gate.update(None, now)
+            self.action_gate.update(None, now)
             return
         gestures = [h["stable"] for h in hands]
-
-        if self.audio is not None:
-            mute_g = next(
-                (g for g in gestures if g in ("Кулак", "Открытая ладонь")), None
-            )
-            if self.mute_gate.update(mute_g, now):
-                if mute_g == "Кулак":
-                    if self.audio.mute_all():
-                        print("Звук выключен")
-                else:
-                    if self.audio.unmute_all():
-                        print("Звук включен")
-
-            vg = next((g for g in gestures if g in self.volume_actions()), None)
-            if self.volume_gate.update(vg, now):
-                delta = self.volume_actions()[vg]
-                if self.audio.change_volume_all(delta):
-                    sign = "+" if delta > 0 else "-"
-                    print(
-                        f"Громкость {int(round(self.audio.get_volume() * 100))}% "
-                        f"({sign}{self.config['volume_step']:g}%)"
-                    )
-
-        mg = next((g for g in gestures if g in ga.GESTURE_ACTIONS), None)
-        if self.media_gate.update(mg, now):
-            kind, payload, message = ga.GESTURE_ACTIONS[mg]
-            self.keys.execute((kind, payload))
-            print(message)
-
-    def volume_actions(self):
-        step = float(self.config["volume_step"]) / 100.0
-        return {"Большой палец вверх": step, "Большой палец вниз": -step}
+        spec = ga.match_binding(self.bindings, gestures)
+        if self.action_gate.update(spec, now):
+            action = ga.parse_action(spec)
+            if action is not None:
+                ga.execute_action(
+                    action,
+                    self.audio,
+                    self.keys,
+                    float(self.config["volume_step"]) / 100.0,
+                )
+                print(ga.COMMAND_LABELS.get(spec, spec))
 
     def update_status(self, hands, fps):
         self.lbl_fps.setText(f"FPS: {fps:.0f}")
@@ -567,7 +642,7 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
         cameras = ga.detect_cameras()
         self.statusBar().clearMessage()
-        dialog = SettingsDialog(self.config, self, cameras)
+        dialog = SettingsDialog(self.config, self, cameras, self.bindings)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         new_cfg = dialog.result_config()
@@ -577,6 +652,7 @@ class MainWindow(QMainWindow):
         )
         self.config.update(new_cfg)
         self.actions_enabled = bool(self.config.get("actions_enabled", True))
+        self.bindings = dict(new_cfg.get("bindings") or {})
         roi_on = bool(self.config["roi_enabled"]) and self.roi is not None
         self.config["roi_enabled"] = roi_on
         self.act_roi_enabled.setChecked(roi_on)
@@ -648,22 +724,29 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Зона сброшена, распознаётся весь кадр.", 8000)
 
     def show_gestures_help(self):
+        lines = []
+        for gesture in ga.ALL_GESTURES:
+            spec = self.bindings.get(gesture)
+            if spec:
+                lines.append(f"{gesture} - {ga.COMMAND_LABELS.get(spec, spec)}")
+        free = [
+            g for g in ga.RESERVED_GESTURES if g not in self.bindings
+        ]
+        if free:
+            lines.append("")
+            lines.append(
+                "Распознаются без команды: " + ", ".join(free) + "."
+            )
         QMessageBox.information(
             self,
             "Жесты и действия",
-            "Кулак - выключить звук\n"
-            "Открытая ладонь - включить звук\n"
-            "Большой палец вверх - громче\n"
-            "Большой палец вниз - тише\n"
-            "Указательный - следующий трек\n"
-            "Победа (V) - предыдущий трек\n"
-            "Коза - Play/Pause\n"
-            "Четыре пальца - рабочий стол (Win+D)\n\n"
-            "Распознаются без команды: Буква L, Три пальца, Shaka,\n"
-            "Мизинец, Коза (ILY), OK.\n\n"
+            "\n".join(lines)
+            + "\n\n"
             "Медиа-клавиши работают глобально, плеер может быть в фоне.\n\n"
+            "Назначение действий: «Настройки» → «Параметры…», таблица\n"
+            "«Жесты и действия»; там же можно задать любой VK-код.\n\n"
             "POST-отправка распознанных жестов в JSON настраивается\n"
-            "в «Настройки» → «Параметры…» (URL и включение).\n\n"
+            "в тех же «Параметрах» (URL и включение).\n\n"
             "Команды работают только с руками в зоне распознавания (если она задана).",
         )
 

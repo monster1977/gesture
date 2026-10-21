@@ -1,6 +1,6 @@
 # Жесты рук — контекст проекта
 
-Версия: **1.7.1** (тег `v1.7.1`)
+Версия: **1.8.0** (тег `v1.8.0`)
 
 ## Назначение
 Управление звуком и медиа на Windows жестами руки перед веб-камерой: распознавание через MediaPipe HandLandmarker, действия через pycaw (звук) и keybd_event (клавиши плеера). Две версии: консольная (`gesture_app.py`) и оконная на PySide6 (`gesture_qt.py`).
@@ -32,7 +32,10 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 
 Отправку команд системе (звук, медиа-клавиши) можно отключить галочкой «Отправлять команды системе» в «Параметрах» (или флагом `--no-actions` в консоли) — распознавание и POST-отправка продолжают работать.
 
-Зарезервированные жесты (распознаются, команды не назначены): Буква L, Три пальца, Shaka, Мизинец, Коза (ILY), OK — список в `RESERVED_GESTURES`, видны в справке приложения, уходят в POST-отправку наравне с остальными.
+## Настройка привязок «жест → действие»
+В «Параметрах» таблица «Жесты и действия»: каждому жесту (все распознаваемые, включая Кулак, большой палец и OK) можно назначить команду из каталога (`COMMAND_CATALOG`: звук pycaw, медиа- и браузерные VK-клавиши, Win+D) или **произвольный VK-код** («Своя клавиша (VK)…» — десятичный или hex, например `0xB3`/`179`; вариант «Win + клавиша»). «Нет команды» убирает привязку. Хранится в config (`bindings`, формат `audio:mute_all`, `key:0xB3`, `combo:0x44`), применяется сразу после «ОК». Спецификации парсит `parse_action`, выбирает `match_binding`, исполняет `execute_action` (единый `ActionGate` — задержка из настроек). Справка «Жесты и действия…» строится из текущих привязок динамически.
+
+Зарезервированные жесты (распознаются, команды по умолчанию нет): Буква L, Три пальца, Shaka, Мизинец, Коза (ILY) — список в `RESERVED_GESTURES`.
 
 Медиа-клавиши (VK 0xB0/0xB1/0xB3, отправка с KEYEVENTF_EXTENDEDKEY) глобальные — плеер может быть в фоне. Mute/громкость — через pycaw на все устройства вывода. Сглаживание: deque 8 кадров, минимум 3 совпадения.
 
@@ -50,8 +53,8 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 Координаты — нормализованное запястье (x=0 слева, y=0 сверху, кадр зеркален как на экране). Индикатор в статусбаре: «POST: N» (зелёный) или красный с числом ошибок.
 
 ## Архитектура
-- `gesture_app.py` — ядро: `GestureRecognizer` (MediaPipe VIDEO-режим, `draw_texts` через PIL/arial.ttf для кириллицы), `HandAnalyzer` (`fingers_state`, `classify`, `stable_gesture`), `ActionGate` (задержка срабатывания), `AudioController` (pycaw; mute/volume на ВСЕ активные устройства вывода; кэш 2 с), `KeyController` (`keybd_event`: `press` — одиночная VK (медиа/браузерные 0xA6..0xB5 с KEYEVENTF_EXTENDEDKEY), `combo` — Win+клавиши, `execute` — диспетчер действий из `GESTURE_ACTIONS`), `GestureReporter` (фоновая POST-отправка JSON: дедуп по набору жестов, троттлинг, счётчики sent/failed), `detect_cameras` (перебор индексов 0..5 через CAP_DSHOW с проверкой кадра), `GESTURE_ACTIONS`, `parse_args`.
-- `gesture_qt.py` — GUI: `VideoWorker(QThread)` — камера (CAP_DSHOW с fallback, 1280x720, зеркалит кадр), распознавание, ROI-фильтр и затемнение, репортер, сигнал `stateReady`; `VideoLabel` — отображение и выбор зоны мышью (`QRubberBand`, нормализованные координаты); `MainWindow` — меню (Настройки/Зона/Справка), `ActionGate` для mute/медиа/громкости, статусбар (FPS, звук, громкость, POST, руки); `SettingsDialog` — параметры (камера — комбобокс из реально обнаруженных, руки, задержка, шаг громкости, зона, URL POST и вкл/выкл).
+- `gesture_app.py` — ядро: `GestureRecognizer` (MediaPipe VIDEO-режим, `draw_texts` через PIL/arial.ttf для кириллицы), `HandAnalyzer` (`fingers_state`, `classify`, `stable_gesture`), `ActionGate` (задержка срабатывания), `AudioController` (pycaw; mute/volume на ВСЕ активные устройства вывода; кэш 2 с), `KeyController` (`keybd_event`: `press` — одиночная VK (медиа/браузерные 0xA6..0xB5 с KEYEVENTF_EXTENDEDKEY), `combo` — Win+клавиши, `execute` — низкоуровневый диспетчер), `GestureReporter` (фоновая POST-отправка JSON: дедуп по набору жестов, троттлинг, счётчики sent/failed), `detect_cameras` (перебор индексов 0..5 через CAP_DSHOW с проверкой кадра), `COMMAND_CATALOG`/`DEFAULT_BINDINGS`/`ALL_GESTURES`, `parse_action`/`match_binding`/`execute_action`, `parse_args`.
+- `gesture_qt.py` — GUI: `VideoWorker(QThread)` — камера (CAP_DSHOW с fallback, 1280x720, зеркалит кадр), распознавание, ROI-фильтр и затемнение, репортер, сигнал `stateReady`; `VideoLabel` — отображение и выбор зоны мышью (`QRubberBand`, нормализованные координаты); `MainWindow` — меню (Настройки/Зона/Справка), единый `action_gate` + `self.bindings`, статусбар (FPS, звук, громкость, POST, руки); `SettingsDialog` — параметры (камера — комбобокс из реально обнаруженных, руки, задержка, шаг громкости, зона, URL POST, команды системе, таблица «Жесты и действия» с каталогом команд и вводом VK-кода).
 
 ## История версий
 - **1.0.0** — консольная версия: распознавание жестов, mute/unmute всех устройств, громкость, медиа-клавиши N/P.
@@ -65,6 +68,7 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 - **1.6.0** — новый жест «Четыре пальца» → рабочий стол (Win+D): `GESTURE_ACTIONS` переведён на формат (тип, payload, сообщение) с диспетчером `KeyController.execute`; добавлен `KeyController.combo` (Win+клавиши); исправление: extended-флаг теперь ставится всем медиа/браузерным VK 0xA6..0xB5 — «Коза» (0xB3) ранее отправлялась без него.
 - **1.7.0** — отключение команд системе: галочка «Отправлять командам системе» в «Параметрах» (config `actions_enabled`) и флаг `--no-actions` в консоли; при отключении выполняются только распознавание и POST-отправка, таймеры задержек сбрасываются.
 - **1.7.1** — зарезервированные жесты без команд: `RESERVED_GESTURES` (Буква L, Три пальца, Shaka, Мизинец, Коза (ILY), OK); отображаются в справке, распознаются и уходят в POST; действий пока нет.
+- **1.8.0** — настраиваемые привязки «жест → действие»: таблица в «Параметрах» для всех распознаваемых жестов (включая Кулак, большой палец, OK — добавлены в `ALL_GESTURES`), каталог команд (`COMMAND_CATALOG`: pycaw-звук, медиа/браузер VK, Win+D) и произвольный VK-код (hex/десятичный, одиночная или Win+клавиша); привязки в config (`bindings`), единый `ActionGate` вместо трёх, справка строится динамически; `GESTURE_ACTIONS` удалён (заменён на `DEFAULT_BINDINGS` + `parse_action`/`match_binding`/`execute_action`).
 
 ## Важные особенности (грабли)
 - НЕ править исходники через PowerShell (`Get-Content`/`Set-Content`/`-replace`): перекодирует UTF-8 в cp1251, кириллица ломается. Только инструменты Edit/Write.

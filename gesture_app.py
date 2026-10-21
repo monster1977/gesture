@@ -29,7 +29,7 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.8.0"
 
 MODEL_PATH = "hand_landmarker.task"
 MODEL_URL = (
@@ -93,11 +93,38 @@ VK_MEDIA_NEXT_TRACK = 0xB0
 VK_MEDIA_PREV_TRACK = 0xB1
 VK_MEDIA_PLAY_PAUSE = 0xB3
 
-GESTURE_ACTIONS = {
-    "Указательный": ("key", VK_MEDIA_NEXT_TRACK, "Следующий трек"),
-    "Победа (V)": ("key", VK_MEDIA_PREV_TRACK, "Предыдущий трек"),
-    "Коза": ("key", VK_MEDIA_PLAY_PAUSE, "Play/Pause"),
-    "Четыре пальца": ("combo", (0x44,), "Рабочий стол"),
+COMMAND_CATALOG = (
+    ("audio:mute_all", "Звук: выключить (все устройства)"),
+    ("audio:unmute_all", "Звук: включить (все устройства)"),
+    ("audio:vol_up", "Звук: громче на шаг"),
+    ("audio:vol_down", "Звук: тише на шаг"),
+    ("key:0xB3", "Медиа: Play/Pause"),
+    ("key:0xB0", "Медиа: следующий трек"),
+    ("key:0xB1", "Медиа: предыдущий трек"),
+    ("key:0xB2", "Медиа: стоп"),
+    ("key:0xAD", "Медиа: звук вкл/выкл (VK_MUTE)"),
+    ("key:0xAF", "Звук: громче (VK_VOLUME_UP)"),
+    ("key:0xAE", "Звук: тише (VK_VOLUME_DOWN)"),
+    ("combo:0x44", "Рабочий стол (Win+D)"),
+    ("key:0xA6", "Браузер: назад"),
+    ("key:0xA7", "Браузер: вперёд"),
+    ("key:0xA3", "Браузер: домашняя страница"),
+    ("key:0xA8", "Браузер: обновить"),
+    ("key:0xB5", "Открыть медиаплеер"),
+    ("key:0xB4", "Открыть почту"),
+)
+
+COMMAND_LABELS = dict(COMMAND_CATALOG)
+
+DEFAULT_BINDINGS = {
+    "Кулак": "audio:mute_all",
+    "Открытая ладонь": "audio:unmute_all",
+    "Большой палец вверх": "audio:vol_up",
+    "Большой палец вниз": "audio:vol_down",
+    "Указательный": "key:0xB0",
+    "Победа (V)": "key:0xB1",
+    "Коза": "key:0xB3",
+    "Четыре пальца": "combo:0x44",
 }
 
 RESERVED_GESTURES = (
@@ -108,6 +135,48 @@ RESERVED_GESTURES = (
     "Коза (ILY)",
     "OK",
 )
+
+ALL_GESTURES = tuple(GESTURE_TABLE.values()) + (
+    "Кулак",
+    "Большой палец вверх",
+    "Большой палец вниз",
+    "OK",
+)
+
+
+def parse_action(spec):
+    kind, _, rest = str(spec).partition(":")
+    if kind == "audio":
+        return ("audio", rest)
+    if kind == "key":
+        return ("key", int(rest, 0))
+    if kind == "combo":
+        return ("combo", tuple(int(p, 0) for p in rest.split(",")))
+    return None
+
+
+def match_binding(bindings, gestures):
+    return next((bindings[g] for g in gestures if g in bindings), None)
+
+
+def execute_action(action, audio, keys, volume_step=0.1):
+    kind, payload = action
+    if kind == "key":
+        keys.press(payload)
+        return True
+    if kind == "combo":
+        keys.combo(*payload)
+        return True
+    if kind == "audio" and audio is not None:
+        if payload == "mute_all":
+            return audio.mute_all()
+        if payload == "unmute_all":
+            return audio.unmute_all()
+        if payload == "vol_up":
+            return audio.change_volume_all(volume_step)
+        if payload == "vol_down":
+            return audio.change_volume_all(-volume_step)
+    return False
 
 _font_cache = {}
 
@@ -506,15 +575,10 @@ def main():
     else:
         print("pycaw не установлен, управление звуком отключено (pip install pycaw).")
 
-    volume_actions = {
-        "Большой палец вверх": args.volume_step / 100.0,
-        "Большой палец вниз": -args.volume_step / 100.0,
-    }
+    bindings = dict(DEFAULT_BINDINGS)
 
     keys = KeyController()
-    mute_gate = ActionGate(args.delay)
-    media_gate = ActionGate(args.delay)
-    volume_gate = ActionGate(args.delay)
+    action_gate = ActionGate(args.delay)
 
     reporter = GestureReporter(args.post_url) if args.post_url else None
     actions_on = not args.no_actions
@@ -562,34 +626,15 @@ def main():
 
         gestures = [info["stable"] for info in hands_info]
 
-        if actions_on and audio is not None:
-            mute_gesture = next(
-                (g for g in gestures if g in ("Кулак", "Открытая ладонь")), None
-            )
-            if mute_gate.update(mute_gesture, now):
-                if mute_gesture == "Кулак":
-                    if audio.mute_all():
-                        print("Звук выключен")
-                else:
-                    if audio.unmute_all():
-                        print("Звук включен")
-
-            volume_gesture = next(
-                (g for g in gestures if g in volume_actions), None
-            )
-            if volume_gate.update(volume_gesture, now):
-                delta = volume_actions[volume_gesture]
-                if audio.change_volume_all(delta):
-                    percent = int(round(audio.get_volume() * 100))
-                    sign = "+" if delta > 0 else "-"
-                    print(f"Громкость {percent}% ({sign}{args.volume_step:g}%)")
-
         if actions_on:
-            media_gesture = next((g for g in gestures if g in GESTURE_ACTIONS), None)
-            if media_gate.update(media_gesture, now):
-                kind, payload, message = GESTURE_ACTIONS[media_gesture]
-                keys.execute((kind, payload))
-                print(message)
+            spec = match_binding(bindings, gestures)
+            if action_gate.update(spec, now):
+                action = parse_action(spec)
+                if action is not None:
+                    execute_action(
+                        action, audio, keys, args.volume_step / 100.0
+                    )
+                    print(COMMAND_LABELS.get(spec, spec))
 
         status = "Рука не найдена" if not hands_info else f"FPS: {fps_smooth:.0f}"
         overlay = [((10, 40), status, (0, 255, 120), 20, (30, 30, 30))]
