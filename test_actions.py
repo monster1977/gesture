@@ -37,4 +37,9 @@ assert ga.GESTURE_ACTIONS["Четыре пальца"] == ("combo", (0x44,), "Р
 for gesture, entry in ga.GESTURE_ACTIONS.items():
     assert entry[0] in ("key", "combo"), gesture
 
+labels = set(ga.GESTURE_TABLE.values()) | {"OK"}
+for gesture in ga.RESERVED_GESTURES:
+    assert gesture in labels, f"reserved gesture not recognized: {gesture}"
+assert not (set(ga.RESERVED_GESTURES) & set(ga.GESTURE_ACTIONS)), "reserved must have no command"
+
 print("ALL ACTION TESTS PASSED")

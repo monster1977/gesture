@@ -29,7 +29,7 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.7.1"
 
 MODEL_PATH = "hand_landmarker.task"
 MODEL_URL = (
@@ -99,6 +99,15 @@ GESTURE_ACTIONS = {
     "Коза": ("key", VK_MEDIA_PLAY_PAUSE, "Play/Pause"),
     "Четыре пальца": ("combo", (0x44,), "Рабочий стол"),
 }
+
+RESERVED_GESTURES = (
+    "Буква L",
+    "Три пальца",
+    "Shaka",
+    "Мизинец",
+    "Коза (ILY)",
+    "OK",
+)
 
 _font_cache = {}
 
