@@ -87,4 +87,19 @@ assert f2.shape == frame.shape
 assert not np.array_equal(f2, frame), "ROI dimming not applied"
 print("process_frame ROI ok, hands:", hands)
 
+dlg = gq.SettingsDialog(dict(gq.DEFAULT_CONFIG), None, [0, 2])
+cfg_out = dlg.result_config()
+assert cfg_out["actions_enabled"] is True
+assert cfg_out["camera"] == 0
+
+import time as _t
+win.actions_enabled = False
+win.apply_actions(
+    [{"hand": "Right", "gesture": "Кулак", "stable": "Кулак", "x": 0.5, "y": 0.5}],
+    _t.time(),
+)
+assert win.mute_gate.gesture is None, "mute gate must be reset when disabled"
+assert win.media_gate.gesture is None, "media gate must be reset when disabled"
+assert win.volume_gate.gesture is None, "volume gate must be reset when disabled"
+
 print("ALL OFFSCREEN ZONE TESTS PASSED")

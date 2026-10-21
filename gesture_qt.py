@@ -46,6 +46,7 @@ DEFAULT_CONFIG = {
     "roi_enabled": False,
     "post_url": "",
     "post_enabled": False,
+    "actions_enabled": True,
 }
 
 
@@ -346,6 +347,11 @@ class SettingsDialog(QDialog):
         self.chk_post = QCheckBox("Отправлять жесты по HTTP POST (JSON)")
         self.chk_post.setChecked(bool(self.config.get("post_enabled")))
 
+        self.chk_actions = QCheckBox(
+            "Отправлять команды системе (звук, медиа-клавиши)"
+        )
+        self.chk_actions.setChecked(bool(self.config.get("actions_enabled", True)))
+
         form = QFormLayout()
         form.addRow("Камера:", self.combo_camera)
         form.addRow("Максимум рук:", self.spin_hands)
@@ -354,6 +360,7 @@ class SettingsDialog(QDialog):
         form.addRow(self.chk_roi)
         form.addRow("URL POST:", self.edit_post_url)
         form.addRow(self.chk_post)
+        form.addRow(self.chk_actions)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -375,6 +382,7 @@ class SettingsDialog(QDialog):
             "roi_enabled": self.chk_roi.isChecked(),
             "post_url": self.edit_post_url.text().strip(),
             "post_enabled": self.chk_post.isChecked(),
+            "actions_enabled": self.chk_actions.isChecked(),
         }
 
 
@@ -395,6 +403,7 @@ class MainWindow(QMainWindow):
         self.mute_gate = ga.ActionGate(config["delay"])
         self.media_gate = ga.ActionGate(config["delay"])
         self.volume_gate = ga.ActionGate(config["delay"])
+        self.actions_enabled = bool(self.config.get("actions_enabled", True))
 
         self.video = VideoLabel()
         self.video.zoneSelected.connect(self.on_zone_selected)
@@ -480,6 +489,11 @@ class MainWindow(QMainWindow):
         self.update_status(hands, payload["fps"])
 
     def apply_actions(self, hands, now):
+        if not self.actions_enabled:
+            self.mute_gate.update(None, now)
+            self.volume_gate.update(None, now)
+            self.media_gate.update(None, now)
+            return
         gestures = [h["stable"] for h in hands]
 
         if self.audio is not None:
@@ -506,8 +520,8 @@ class MainWindow(QMainWindow):
 
         mg = next((g for g in gestures if g in ga.GESTURE_ACTIONS), None)
         if self.media_gate.update(mg, now):
-            key, message = ga.GESTURE_ACTIONS[mg]
-            self.keys.press(key)
+            kind, payload, message = ga.GESTURE_ACTIONS[mg]
+            self.keys.execute((kind, payload))
             print(message)
 
     def volume_actions(self):
@@ -562,6 +576,7 @@ class MainWindow(QMainWindow):
             or new_cfg["hands"] != self.config["hands"]
         )
         self.config.update(new_cfg)
+        self.actions_enabled = bool(self.config.get("actions_enabled", True))
         roi_on = bool(self.config["roi_enabled"]) and self.roi is not None
         self.config["roi_enabled"] = roi_on
         self.act_roi_enabled.setChecked(roi_on)
@@ -582,7 +597,12 @@ class MainWindow(QMainWindow):
         self.save()
         if restart:
             self.start_worker()
-        self.statusBar().showMessage("Параметры применены.", 5000)
+        if not self.actions_enabled:
+            self.statusBar().showMessage(
+                "Команды системе отключены: только распознавание и POST.", 5000
+            )
+        else:
+            self.statusBar().showMessage("Параметры применены.", 5000)
 
     def start_zone_selection(self):
         self.video.selecting = True
@@ -637,7 +657,8 @@ class MainWindow(QMainWindow):
             "Большой палец вниз - тише\n"
             "Указательный - следующий трек\n"
             "Победа (V) - предыдущий трек\n"
-            "Коза - Play/Pause\n\n"
+            "Коза - Play/Pause\n"
+            "Четыре пальца - рабочий стол (Win+D)\n\n"
             "Медиа-клавиши работают глобально, плеер может быть в фоне.\n\n"
             "POST-отправка распознанных жестов в JSON настраивается\n"
             "в «Настройки» → «Параметры…» (URL и включение).\n\n"

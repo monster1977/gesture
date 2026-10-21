@@ -1,6 +1,6 @@
 # Жесты рук — контекст проекта
 
-Версия: **1.5.0** (тег `v1.5.0`)
+Версия: **1.7.0** (тег `v1.7.0`)
 
 ## Назначение
 Управление звуком и медиа на Windows жестами руки перед веб-камерой: распознавание через MediaPipe HandLandmarker, действия через pycaw (звук) и keybd_event (клавиши плеера). Две версии: консольная (`gesture_app.py`) и оконная на PySide6 (`gesture_qt.py`).
@@ -9,7 +9,7 @@
 - EXE: `dist\ЖестыРук.exe` (однофайловый, все библиотеки и модель внутри; первый старт ~30-60 с из-за распаковки; конфиг `gesture_qt_config.json` читается/пишется рядом с exe; Windows SmartScreen может предупреждать — «Подробнее» → «Выполнить в любом случае»)
 - Ярлык «Жесты рук» на рабочем столе — запуск БЕЗ консоли (`run_gui.pyw` через `pythonw.exe`, иконка `icon.ico`; при падении трейсборд пишется в `error.log`)
 - GUI с консолью: `python gesture_qt.py` (заголовок окна показывает версию)
-- Консоль: `python gesture_app.py [--camera N] [--hands N] [--delay SEC] [--volume-step PCT] [--post-url URL] [--version]`
+- Консоль: `python gesture_app.py [--camera N] [--hands N] [--delay SEC] [--volume-step PCT] [--post-url URL] [--no-actions] [--version]`
 
 ## Пересборка EXE
 ```
@@ -28,6 +28,9 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 | Указательный | Следующий трек (VK_MEDIA_NEXT_TRACK) |
 | Победа (V) | Предыдущий трек (VK_MEDIA_PREV_TRACK) |
 | Коза | Play/Pause (VK_MEDIA_PLAY_PAUSE) |
+| Четыре пальца | Рабочий стол (Win+D) |
+
+Отправку команд системе (звук, медиа-клавиши) можно отключить галочкой «Отправлять команды системе» в «Параметрах» (или флагом `--no-actions` в консоли) — распознавание и POST-отправка продолжают работать.
 
 Медиа-клавиши (VK 0xB0/0xB1/0xB3, отправка с KEYEVENTF_EXTENDEDKEY) глобальные — плеер может быть в фоне. Mute/громкость — через pycaw на все устройства вывода. Сглаживание: deque 8 кадров, минимум 3 совпадения.
 
@@ -45,7 +48,7 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 Координаты — нормализованное запястье (x=0 слева, y=0 сверху, кадр зеркален как на экране). Индикатор в статусбаре: «POST: N» (зелёный) или красный с числом ошибок.
 
 ## Архитектура
-- `gesture_app.py` — ядро: `GestureRecognizer` (MediaPipe VIDEO-режим, `draw_texts` через PIL/arial.ttf для кириллицы), `HandAnalyzer` (`fingers_state`, `classify`, `stable_gesture`), `ActionGate` (задержка срабатывания), `AudioController` (pycaw; mute/volume на ВСЕ активные устройства вывода; кэш 2 с), `KeyController` (`keybd_event`), `GestureReporter` (фоновая POST-отправка JSON: дедуп по набору жестов, троттлинг, счётчики sent/failed), `detect_cameras` (перебор индексов 0..5 через CAP_DSHOW с проверкой кадра), `GESTURE_ACTIONS`, `parse_args`.
+- `gesture_app.py` — ядро: `GestureRecognizer` (MediaPipe VIDEO-режим, `draw_texts` через PIL/arial.ttf для кириллицы), `HandAnalyzer` (`fingers_state`, `classify`, `stable_gesture`), `ActionGate` (задержка срабатывания), `AudioController` (pycaw; mute/volume на ВСЕ активные устройства вывода; кэш 2 с), `KeyController` (`keybd_event`: `press` — одиночная VK (медиа/браузерные 0xA6..0xB5 с KEYEVENTF_EXTENDEDKEY), `combo` — Win+клавиши, `execute` — диспетчер действий из `GESTURE_ACTIONS`), `GestureReporter` (фоновая POST-отправка JSON: дедуп по набору жестов, троттлинг, счётчики sent/failed), `detect_cameras` (перебор индексов 0..5 через CAP_DSHOW с проверкой кадра), `GESTURE_ACTIONS`, `parse_args`.
 - `gesture_qt.py` — GUI: `VideoWorker(QThread)` — камера (CAP_DSHOW с fallback, 1280x720, зеркалит кадр), распознавание, ROI-фильтр и затемнение, репортер, сигнал `stateReady`; `VideoLabel` — отображение и выбор зоны мышью (`QRubberBand`, нормализованные координаты); `MainWindow` — меню (Настройки/Зона/Справка), `ActionGate` для mute/медиа/громкости, статусбар (FPS, звук, громкость, POST, руки); `SettingsDialog` — параметры (камера — комбобокс из реально обнаруженных, руки, задержка, шаг громкости, зона, URL POST и вкл/выкл).
 
 ## История версий
@@ -57,6 +60,8 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 - **1.4.0** — POST-отправка распознанных жестов с координатами: `GestureReporter` (JSON в фоновом потоке, дедупликация по изменению набора жестов, троттлинг 0,2 с, пустое событие при уходе рук); настройка в «Параметрах» (URL + галочка) и флаг `--post-url` в консоли; координаты запястья добавлены в `hands_info` (нормализованные 0..1); индикатор POST в статусбаре.
 - **1.4.1** — запуск без консольного окна: лаунчер `run_gui.pyw` (через `pythonw.exe`; sys.stdout там None, `print` безопасно молчит), иконка `icon.ico` (скелет руки, сгенерирован из `HAND_CONNECTIONS`), ярлык «Жесты рук» на рабочем столе; при падении `run_gui.pyw` пишет трейсборд в `error.log`.
 - **1.5.0** — выбор камеры: в «Параметрах» комбобокс с реально обнаруженными камерами (`detect_cameras`, перебор 0..5 с проверкой захвата кадра); сборка однофайлового `dist\ЖестыРук.exe` (PyInstaller, модель и mediapipe внутри, `model_asset_path` для `sys._MEIPASS`, конфиг рядом с exe через `_app_dir`).
+- **1.6.0** — новый жест «Четыре пальца» → рабочий стол (Win+D): `GESTURE_ACTIONS` переведён на формат (тип, payload, сообщение) с диспетчером `KeyController.execute`; добавлен `KeyController.combo` (Win+клавиши); исправление: extended-флаг теперь ставится всем медиа/браузерным VK 0xA6..0xB5 — «Коза» (0xB3) ранее отправлялась без него.
+- **1.7.0** — отключение команд системе: галочка «Отправлять командам системе» в «Параметрах» (config `actions_enabled`) и флаг `--no-actions` в консоли; при отключении выполняются только распознавание и POST-отправка, таймеры задержек сбрасываются.
 
 ## Важные особенности (грабли)
 - НЕ править исходники через PowerShell (`Get-Content`/`Set-Content`/`-replace`): перекодирует UTF-8 в cp1251, кириллица ломается. Только инструменты Edit/Write.

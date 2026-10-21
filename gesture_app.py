@@ -29,7 +29,7 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.7.0"
 
 MODEL_PATH = "hand_landmarker.task"
 MODEL_URL = (
@@ -94,9 +94,10 @@ VK_MEDIA_PREV_TRACK = 0xB1
 VK_MEDIA_PLAY_PAUSE = 0xB3
 
 GESTURE_ACTIONS = {
-    "Указательный": (VK_MEDIA_NEXT_TRACK, "Следующий трек"),
-    "Победа (V)": (VK_MEDIA_PREV_TRACK, "Предыдущий трек"),
-    "Коза": (VK_MEDIA_PLAY_PAUSE, "Play/Pause"),
+    "Указательный": ("key", VK_MEDIA_NEXT_TRACK, "Следующий трек"),
+    "Победа (V)": ("key", VK_MEDIA_PREV_TRACK, "Предыдущий трек"),
+    "Коза": ("key", VK_MEDIA_PLAY_PAUSE, "Play/Pause"),
+    "Четыре пальца": ("combo", (0x44,), "Рабочий стол"),
 }
 
 _font_cache = {}
@@ -137,14 +138,29 @@ class KeyController:
 
     KEYEVENTF_KEYUP = 2
     KEYEVENTF_EXTENDEDKEY = 1
+    VK_LWIN = 0x5B
 
     def __init__(self):
         self.user32 = ctypes.windll.user32
 
     def press(self, vk):
-        flags = self.KEYEVENTF_EXTENDEDKEY if 0xAD <= vk <= 0xB2 else 0
+        flags = self.KEYEVENTF_EXTENDEDKEY if 0xA6 <= vk <= 0xB5 else 0
         self.user32.keybd_event(vk, 0, flags, 0)
         self.user32.keybd_event(vk, 0, flags | self.KEYEVENTF_KEYUP, 0)
+
+    def combo(self, *vks):
+        self.user32.keybd_event(self.VK_LWIN, 0, 0, 0)
+        for vk in vks:
+            self.user32.keybd_event(vk, 0, 0, 0)
+            self.user32.keybd_event(vk, 0, self.KEYEVENTF_KEYUP, 0)
+        self.user32.keybd_event(self.VK_LWIN, 0, self.KEYEVENTF_KEYUP, 0)
+
+    def execute(self, action):
+        kind, payload = action
+        if kind == "key":
+            self.press(payload)
+        elif kind == "combo":
+            self.combo(*payload)
 
 
 class GestureReporter:
@@ -457,6 +473,10 @@ def parse_args():
              "(например, http://192.168.1.10:8080/report)"
     )
     parser.add_argument(
+        "--no-actions", action="store_true",
+        help="Без команд системе: только распознавание и POST-отправка"
+    )
+    parser.add_argument(
         "--version", action="version",
         version=f"Жесты рук v{APP_VERSION}"
     )
@@ -488,6 +508,7 @@ def main():
     volume_gate = ActionGate(args.delay)
 
     reporter = GestureReporter(args.post_url) if args.post_url else None
+    actions_on = not args.no_actions
 
     cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
     if not cap.isOpened():
@@ -507,6 +528,8 @@ def main():
     )
     if reporter is not None:
         print(f"POST-отправка жестов: {args.post_url}")
+    if not actions_on:
+        print("Команды системе отключены (--no-actions).")
     if args.delay > 0:
         print(f"Задержка срабатывания: {args.delay:g} с.")
     print("Распознавание жестов запущено. Нажмите Q в окне для выхода.")
@@ -530,7 +553,7 @@ def main():
 
         gestures = [info["stable"] for info in hands_info]
 
-        if audio is not None:
+        if actions_on and audio is not None:
             mute_gesture = next(
                 (g for g in gestures if g in ("Кулак", "Открытая ладонь")), None
             )
@@ -552,11 +575,12 @@ def main():
                     sign = "+" if delta > 0 else "-"
                     print(f"Громкость {percent}% ({sign}{args.volume_step:g}%)")
 
-        media_gesture = next((g for g in gestures if g in GESTURE_ACTIONS), None)
-        if media_gate.update(media_gesture, now):
-            key, message = GESTURE_ACTIONS[media_gesture]
-            keys.press(key)
-            print(message)
+        if actions_on:
+            media_gesture = next((g for g in gestures if g in GESTURE_ACTIONS), None)
+            if media_gate.update(media_gesture, now):
+                kind, payload, message = GESTURE_ACTIONS[media_gesture]
+                keys.execute((kind, payload))
+                print(message)
 
         status = "Рука не найдена" if not hands_info else f"FPS: {fps_smooth:.0f}"
         overlay = [((10, 40), status, (0, 255, 120), 20, (30, 30, 30))]
