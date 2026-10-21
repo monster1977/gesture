@@ -1,4 +1,5 @@
 ﻿import os
+import sys
 import time
 import math
 import json
@@ -28,13 +29,33 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.5.0"
 
 MODEL_PATH = "hand_landmarker.task"
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
     "hand_landmarker/float16/1/hand_landmarker.task"
 )
+
+def model_asset_path():
+    base = getattr(sys, "_MEIPASS", "")
+    if base:
+        bundled = os.path.join(base, MODEL_PATH)
+        if os.path.exists(bundled):
+            return bundled
+    return MODEL_PATH
+
+
+def detect_cameras(max_index=6):
+    found = []
+    for i in range(max_index):
+        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+        ok = cap.isOpened() and cap.read()[0]
+        cap.release()
+        if ok:
+            found.append(i)
+    return found
+
 
 HAND_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 4),
@@ -321,7 +342,8 @@ class HandAnalyzer:
 
 
 class GestureRecognizer:
-    def __init__(self, model_path=MODEL_PATH, num_hands=2):
+    def __init__(self, model_path=None, num_hands=2):
+        model_path = model_path or model_asset_path()
         ensure_model(model_path)
         options = mp.tasks.vision.HandLandmarkerOptions(
             base_options=mp.tasks.BaseOptions(model_asset_path=model_path),

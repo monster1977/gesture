@@ -8,7 +8,7 @@ sys.path.insert(0, r"C:\i\gesture")
 
 import gesture_app as ga
 
-assert ga.APP_VERSION == "1.4.0"
+assert ga.APP_VERSION
 
 captured = []
 

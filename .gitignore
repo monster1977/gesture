@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 gesture_qt_config.json
+build/
+dist/
+*.spec

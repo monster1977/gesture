@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction, QImage, QPixmap, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -28,9 +29,13 @@ from PySide6.QtWidgets import (
 
 import gesture_app as ga
 
-CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "gesture_qt_config.json"
-)
+def _app_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+CONFIG_PATH = os.path.join(_app_dir(), "gesture_qt_config.json")
 
 DEFAULT_CONFIG = {
     "camera": 0,
@@ -301,14 +306,21 @@ class VideoLabel(QLabel):
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, config, parent=None):
+    def __init__(self, config, parent=None, cameras=None):
         super().__init__(parent)
         self.setWindowTitle("Параметры")
         self.config = dict(config)
 
-        self.spin_camera = QSpinBox()
-        self.spin_camera.setRange(0, 9)
-        self.spin_camera.setValue(int(self.config["camera"]))
+        self.combo_camera = QComboBox()
+        cam_list = list(cameras) if cameras else list(range(10))
+        current = int(self.config["camera"])
+        if current not in cam_list:
+            cam_list.append(current)
+            cam_list.sort()
+        for i in cam_list:
+            self.combo_camera.addItem(f"Камера {i}", int(i))
+        pos = self.combo_camera.findData(current)
+        self.combo_camera.setCurrentIndex(pos if pos >= 0 else 0)
 
         self.spin_hands = QSpinBox()
         self.spin_hands.setRange(1, 4)
@@ -335,7 +347,7 @@ class SettingsDialog(QDialog):
         self.chk_post.setChecked(bool(self.config.get("post_enabled")))
 
         form = QFormLayout()
-        form.addRow("Камера:", self.spin_camera)
+        form.addRow("Камера:", self.combo_camera)
         form.addRow("Максимум рук:", self.spin_hands)
         form.addRow("Задержка срабатывания:", self.spin_delay)
         form.addRow("Шаг громкости:", self.spin_volume)
@@ -356,7 +368,7 @@ class SettingsDialog(QDialog):
 
     def result_config(self):
         return {
-            "camera": self.spin_camera.value(),
+            "camera": int(self.combo_camera.currentData()),
             "hands": self.spin_hands.value(),
             "delay": self.spin_delay.value(),
             "volume_step": self.spin_volume.value(),
@@ -537,7 +549,11 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Ошибка", message)
 
     def open_settings(self):
-        dialog = SettingsDialog(self.config, self)
+        self.statusBar().showMessage("Поиск камер…")
+        QApplication.processEvents()
+        cameras = ga.detect_cameras()
+        self.statusBar().clearMessage()
+        dialog = SettingsDialog(self.config, self, cameras)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         new_cfg = dialog.result_config()
