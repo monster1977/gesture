@@ -1,6 +1,6 @@
 # Жесты рук — контекст проекта
 
-Версия: **1.8.1** (тег `v1.8.1`)
+Версия: **1.8.2** (тег `v1.8.2`)
 
 ## Назначение
 Управление звуком и медиа на Windows жестами руки перед веб-камерой: распознавание через MediaPipe HandLandmarker, действия через pycaw (звук) и keybd_event (клавиши плеера). Две версии: консольная (`gesture_app.py`) и оконная на PySide6 (`gesture_qt.py`).
@@ -18,6 +18,7 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 ```
 Сборка из `C:\i\gesture`; результат в `dist\`. Пути при заморозке: модель берётся из `sys._MEIPASS` (`model_asset_path`), конфиг — рядом с exe (`_app_dir`).
 - Значения по умолчанию: камера 0, до 2 рук, задержка 0 с, шаг громкости 10%.
+- `dist/` и `build/` хранятся в репозитории через **Git LFS** (exe и .pkg больше 100 МиБ — обычный git их не пропустит). Для клонирования нужен `git lfs install`.
 
 ## Жесты и действия
 | Жест | Действие |
@@ -55,8 +56,8 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 Координаты — нормализованное запястье (x=0 слева, y=0 сверху, кадр зеркален как на экране). Индикатор в статусбаре: «POST: N» (зелёный) или красный с числом ошибок.
 
 ## Архитектура
-- `gesture_app.py` — ядро: `GestureRecognizer` (MediaPipe VIDEO-режим, `draw_texts` через PIL/arial.ttf для кириллицы), `HandAnalyzer` (`fingers_state`, `classify`, `stable_gesture`), `ActionGate` (задержка срабатывания), `AudioController` (pycaw; mute/volume на ВСЕ активные устройства вывода; кэш 2 с), `KeyController` (`keybd_event`: `press` — одиночная VK (медиа/браузерные 0xA6..0xB5 с KEYEVENTF_EXTENDEDKEY), `combo` — Win+клавиши, `execute` — низкоуровневый диспетчер), `GestureReporter` (фоновая POST-отправка JSON: дедуп по набору жестов, троттлинг, счётчики sent/failed), `detect_cameras` (перебор индексов 0..5 через CAP_DSHOW с проверкой кадра), `COMMAND_CATALOG`/`DEFAULT_BINDINGS`/`ALL_GESTURES`, `parse_action`/`match_binding`/`execute_action`, `parse_args`.
-- `gesture_qt.py` — GUI: `VideoWorker(QThread)` — камера (CAP_DSHOW с fallback, 1280x720, зеркалит кадр), распознавание, ROI-фильтр и затемнение, репортер, сигнал `stateReady`; `CameraDetectWorker(QThread)` — поиск камер в фоне (окно не блокируется); `VideoLabel` — отображение и выбор зоны мышью (`QRubberBand`, нормализованные координаты); `MainWindow` — меню (Настройки/Зона/Справка), единый `action_gate` + `self.bindings`, статусбар (FPS, звук, громкость, POST, руки); `open_settings` → `CameraDetectWorker` → `_on_cameras_detected` → `SettingsDialog` → `apply_settings`; `SettingsDialog` — параметры (камера — комбобокс из реально обнаруженных, руки, задержка, шаг громкости, зона, URL POST, команды системе, таблица «Жесты и действия» с каталогом команд и вводом VK-кода).
+- `gesture_app.py` — ядро: `GestureRecognizer` (MediaPipe VIDEO-режим, `draw_texts` через PIL/arial.ttf для кириллицы), `HandAnalyzer` (`fingers_state`, `classify`, `stable_gesture`), `ActionGate` (задержка срабатывания), `AudioController` (pycaw; mute/volume на ВСЕ активные устройства вывода; кэш 2 с), `KeyController` (`keybd_event`: `press` — одиночная VK (медиа/браузерные 0xA6..0xB5 с KEYEVENTF_EXTENDEDKEY), `combo` — Win+клавиши, `execute` — низкоуровневый диспетчер), `GestureReporter` (фоновая POST-отправка JSON: дедуп по набору жестов, троттлинг, счётчики sent/failed), `detect_cameras` (перебор индексов 0..5 через CAP_DSHOW с проверкой кадра; параметр `skip` — индексы, которые открывать нельзя), `COMMAND_CATALOG`/`DEFAULT_BINDINGS`/`ALL_GESTURES`, `parse_action`/`match_binding`/`execute_action`, `parse_args`.
+- `gesture_qt.py` — GUI: `VideoWorker(QThread)` — камера (CAP_DSHOW с fallback, 1280x720, зеркалит кадр), при обрыве захвата переподключается (до 5 попыток) и только потом выдаёт ошибку, распознавание, ROI-фильтр и затемнение, репортер, сигнал `stateReady`; `CameraDetectWorker(QThread)` — поиск камер в фоне (окно не блокируется), занятую приложением камеру пропускает; `VideoLabel` — отображение и выбор зоны мышью (`QRubberBand`, нормализованные координаты); `MainWindow` — меню (Настройки/Зона/Справка), единый `action_gate` + `self.bindings`, статусбар (FPS, звук, громкость, POST, руки); `open_settings` → `CameraDetectWorker` → `_on_cameras_detected` → `SettingsDialog` → `apply_settings`; `SettingsDialog` — параметры (камера — комбобокс из реально обнаруженных, руки, задержка, шаг громкости, зона, URL POST, команды системе, таблица «Жесты и действия» с каталогом команд и вводом VK-кода).
 
 ## История версий
 - **1.0.0** — консольная версия: распознавание жестов, mute/unmute всех устройств, громкость, медиа-клавиши N/P.
@@ -72,12 +73,15 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 - **1.7.1** — зарезервированные жесты без команд: `RESERVED_GESTURES` (Буква L, Три пальца, Shaka, Мизинец, Коза (ILY), OK); отображаются в справке, распознаются и уходят в POST; действий пока нет.
 - **1.8.0** — настраиваемые привязки «жест → действие»: таблица в «Параметрах» для всех распознаваемых жестов (включая Кулак, большой палец, OK — добавлены в `ALL_GESTURES`), каталог команд (`COMMAND_CATALOG`: pycaw-звук, медиа/браузер VK, Win+D) и произвольный VK-код (hex/десятичный, одиночная или Win+клавиша); привязки в config (`bindings`), единый `ActionGate` вместо трёх, справка строится динамически; `GESTURE_ACTIONS` удалён (заменён на `DEFAULT_BINDINGS` + `parse_action`/`match_binding`/`execute_action`).
 - **1.8.1** — исправления после 1.8.0: (1) в `open_settings` остались ссылки на удалённые в 1.8.0 гейты `mute_gate`/`media_gate`/`volume_gate` → `AttributeError` при нажатии «ОК» в «Параметрах» (приложение падало); теперь обновляется единый `action_gate.delay`; (2) `parse_action` больше не падает на битой спецификации (try/except → `None`); (3) пустой набор привязок (`bindings: {}`) больше не подменяется дефолтными при следующем открытии «Параметров» (в config `bindings: null` = «не задано»); (4) список «Своя: …» в комбобоксе больше не разрастается, отмена ввода VK-кода возвращает прежнюю привязку; (5) жест «Большой палец (вбок)» добавлен в `ALL_GESTURES` — ему можно назначить действие; (6) поиск камер вынесен в фоновый поток (`CameraDetectWorker`) — окно не подвисает; применение настроек вынесено в `MainWindow.apply_settings`.
+- **1.8.2** — исправление ошибки при входе в «Параметры»: поиск камер открывал камеру, которую уже держит приложение → собственный захват ломался (кадры не шли) и появлялось окно «Ошибка: Кадр не получен, камера отключена.»; теперь `detect_cameras` принимает `skip` и не трогает занятую камеру (текущая камера добавляется в список вручную), а `VideoWorker` при обрыве захвата переподключается (до 5 попыток) вместо аварийного выхода; дополнительно устранено падение при закрытии приложения «QThread: Destroyed while thread is still running» (0xC0000409) — поток поиска камер удаляется только после сигнала `finished`.
 
 ## Важные особенности (грабли)
 - НЕ править исходники через PowerShell (`Get-Content`/`Set-Content`/`-replace`): перекодирует UTF-8 в cp1251, кириллица ломается. Только инструменты Edit/Write.
 - Кириллицу на кадре рисовать только через PIL + `arial.ttf`; `cv2.putText` её не поддерживает. Кракозябры в выводе консоли — артефакт отображения, файл в порядке.
 - pycaw 20260927: у объекта `AudioUtilities.GetSpeakers()` нет `.Activate` — готовый интерфейс в `.EndpointVolume`; перечисление устройств: `EnumAudioEndpoints(EDataFlow.eRender.value, DEVICE_STATE.ACTIVE.value)` + `GetCount()`/`Item(i)`.
 - Модель `hand_landmarker.task` скачивается автоматически при отсутствии (URL в коде).
+- Камеру, которую уже держит приложение, нельзя открывать повторно: второй `VideoCapture` того же устройства ломает текущий захват (кадры не идут → «Кадр не получен, камера отключена.»). Поэтому `detect_cameras` принимает `skip` — занятые индексы пропускаются, текущая камера добавляется в список сам.
+- `QThread` нельзя удалять через `deleteLater()`, пока он не завершился: Qt прервётся с «QThread: Destroyed while thread is still running» (код выхода 0xC0000409). Правильно — `thread.finished.connect(thread.deleteLater)`.
 - Среда: Python 3.14, PySide6, mediapipe 0.10.35, opencv 5.0.0.93, numpy 2.5.1, Pillow, pycaw, comtypes.
 
 ## Проверка
@@ -88,6 +92,8 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 `python test_actions.py` — разбор и исполнение привязок: `parse_action` (в т.ч. битые спецификации), `match_binding`, `execute_action` (аудио/ключ/combo), состав `ALL_GESTURES`/`RESERVED_GESTURES`/`DEFAULT_BINDINGS`.
 
 `python test_settings.py` — offscreen-тест «Параметров»: применение настроек без падения (`apply_settings`, обновление `action_gate.delay`), семантика `bindings` (`null` = дефолт, `{}` = без команд), список «Своя: …» не разрастается, отмена ввода VK-кода возвращает прежнюю привязку.
+
+`python test_cameras.py` — тест поиска камер: `detect_cameras` не открывает индексы из `skip` (занятую приложением камеру трогать нельзя), `CameraDetectWorker` прокидывает `skip` в ядро.
 
 ## Не входит в проект
 `C:\i` содержит посторонние файлы (`timer*.html`, `findbook.py`, `testlm.py`) — оставлены на месте.

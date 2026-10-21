@@ -103,27 +103,45 @@ class VideoWorker(QThread):
         except Exception as e:
             self.errorOccurred.emit(str(e))
 
-    def _run(self):
+    def _open_capture(self):
         cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
         if not cap.isOpened():
             cap = cv2.VideoCapture(self.camera_index)
         if not cap.isOpened():
+            return None
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        return cap
+
+    def _run(self):
+        cap = self._open_capture()
+        if cap is None:
             self.errorOccurred.emit(
                 f"Не удалось открыть камеру {self.camera_index}."
             )
             return
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
         recognizer = ga.GestureRecognizer(num_hands=self.num_hands)
         prev_time = time.time()
         fps = 0.0
+        failures = 0
 
         while self._running:
-            ok, frame = cap.read()
+            try:
+                ok, frame = cap.read()
+            except Exception:
+                ok, frame = False, None
             if not ok:
-                self.errorOccurred.emit("Кадр не получен, камера отключена.")
-                break
+                # Кадр не пришёл: камеру могло занять другое приложение.
+                # Пробуем переподключиться и только затем сдаёмся.
+                failures += 1
+                cap.release()
+                cap = self._open_capture()
+                if cap is None or failures >= 5:
+                    self.errorOccurred.emit("Кадр не получен, камера отключена.")
+                    break
+                time.sleep(0.3)
+                continue
+            failures = 0
             frame = cv2.flip(frame, 1)
             frame, hands_info, fps = self._process_frame(
                 frame, recognizer, prev_time, fps
@@ -236,9 +254,13 @@ class CameraDetectWorker(QThread):
 
     resultReady = Signal(object)
 
+    def __init__(self, skip=(), parent=None):
+        super().__init__(parent)
+        self.skip = set(skip)
+
     def run(self):
         try:
-            cameras = ga.detect_cameras()
+            cameras = ga.detect_cameras(skip=self.skip)
         except Exception:
             cameras = []
         self.resultReady.emit(cameras)
@@ -683,16 +705,27 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Поиск камер уже выполняется…")
             return
         self.statusBar().showMessage("Поиск камер…")
-        self._cam_thread = CameraDetectWorker(self)
-        self._cam_thread.resultReady.connect(self._on_cameras_detected)
-        self._cam_thread.start()
+        # Камеру, которую уже держит приложение, открывать нельзя:
+        # второй захват того же устройства ломает текущий.
+        busy = {int(self.config["camera"])}
+        thread = CameraDetectWorker(skip=busy, parent=self)
+        thread.resultReady.connect(self._on_cameras_detected)
+        # Удалять поток можно только после его завершения: иначе Qt
+        # прервётся с "QThread: Destroyed while thread is still running".
+        thread.finished.connect(self._on_camera_thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        self._cam_thread = thread
+        thread.start()
+
+    def _on_camera_thread_finished(self):
+        self._cam_thread = None
 
     def _on_cameras_detected(self, cameras):
-        thread = self._cam_thread
-        self._cam_thread = None
-        if thread is not None:
-            thread.deleteLater()
         self.statusBar().clearMessage()
+        cameras = list(cameras)
+        current = int(self.config["camera"])
+        if current not in cameras:
+            cameras.append(current)
         dialog = SettingsDialog(self.config, self, cameras, self.bindings)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return

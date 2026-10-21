@@ -29,7 +29,7 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 
 MODEL_PATH = "hand_landmarker.task"
 MODEL_URL = (
@@ -46,9 +46,17 @@ def model_asset_path():
     return MODEL_PATH
 
 
-def detect_cameras(max_index=6):
+def detect_cameras(max_index=6, skip=()):
+    """Ищет доступные камеры.
+
+    Камеры из skip пропускаются: устройство, уже занятое приложением,
+    нельзя открыть повторно — второй захват ломает текущий.
+    """
+    skip = set(skip)
     found = []
     for i in range(max_index):
+        if i in skip:
+            continue
         cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
         ok = cap.isOpened() and cap.read()[0]
         cap.release()
