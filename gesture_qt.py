@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QLineEdit,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -38,6 +39,8 @@ DEFAULT_CONFIG = {
     "volume_step": 10.0,
     "roi": None,
     "roi_enabled": False,
+    "post_url": "",
+    "post_enabled": False,
 }
 
 
@@ -73,6 +76,7 @@ class VideoWorker(QThread):
         self.num_hands = num_hands
         self.roi = None
         self.roi_enabled = False
+        self.reporter = None
         self._running = True
 
     def stop(self):
@@ -111,6 +115,9 @@ class VideoWorker(QThread):
                 frame, recognizer, prev_time, fps
             )
             prev_time = time.time()
+
+            if self.reporter is not None:
+                self.reporter.update(hands_info, fps)
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w = frame.shape[:2]
@@ -170,6 +177,8 @@ class VideoWorker(QThread):
                         "hand": side,
                         "gesture": stable or raw,
                         "stable": stable,
+                        "x": lms[0].x,
+                        "y": lms[0].y,
                     }
                 )
                 label = stable if stable else "..."
@@ -320,12 +329,19 @@ class SettingsDialog(QDialog):
         self.chk_roi = QCheckBox("Использовать зону распознавания")
         self.chk_roi.setChecked(bool(self.config["roi_enabled"]))
 
+        self.edit_post_url = QLineEdit(str(self.config.get("post_url") or ""))
+        self.edit_post_url.setPlaceholderText("http://192.168.1.10:8080/report")
+        self.chk_post = QCheckBox("Отправлять жесты по HTTP POST (JSON)")
+        self.chk_post.setChecked(bool(self.config.get("post_enabled")))
+
         form = QFormLayout()
         form.addRow("Камера:", self.spin_camera)
         form.addRow("Максимум рук:", self.spin_hands)
         form.addRow("Задержка срабатывания:", self.spin_delay)
         form.addRow("Шаг громкости:", self.spin_volume)
         form.addRow(self.chk_roi)
+        form.addRow("URL POST:", self.edit_post_url)
+        form.addRow(self.chk_post)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -345,6 +361,8 @@ class SettingsDialog(QDialog):
             "delay": self.spin_delay.value(),
             "volume_step": self.spin_volume.value(),
             "roi_enabled": self.chk_roi.isChecked(),
+            "post_url": self.edit_post_url.text().strip(),
+            "post_enabled": self.chk_post.isChecked(),
         }
 
 
@@ -406,7 +424,14 @@ class MainWindow(QMainWindow):
         self.lbl_sound = QLabel("Звук: -")
         self.lbl_volume = QLabel("Громкость: -")
         self.lbl_hands = QLabel("Руки: -")
-        for w in (self.lbl_hands, self.lbl_volume, self.lbl_sound, self.lbl_fps):
+        self.lbl_post = QLabel("POST: выкл")
+        for w in (
+            self.lbl_hands,
+            self.lbl_volume,
+            self.lbl_sound,
+            self.lbl_post,
+            self.lbl_fps,
+        ):
             self.statusBar().addPermanentWidget(w)
         self.statusBar().showMessage("Зона: не задана. Меню «Зона» → «Выбрать зону мышью».")
 
@@ -416,6 +441,9 @@ class MainWindow(QMainWindow):
         worker = VideoWorker(self.config["camera"], self.config["hands"])
         worker.roi = self.roi
         worker.roi_enabled = bool(self.config.get("roi_enabled")) and self.roi is not None
+        post_url = str(self.config.get("post_url") or "").strip()
+        if self.config.get("post_enabled") and post_url:
+            worker.reporter = ga.GestureReporter(post_url)
         worker.stateReady.connect(self.on_state)
         worker.errorOccurred.connect(self.on_worker_error)
         self.worker = worker
@@ -491,6 +519,18 @@ class MainWindow(QMainWindow):
             )
         else:
             self.lbl_hands.setText("Руки: нет")
+        rep = self.worker.reporter if self.worker is not None else None
+        if rep is None:
+            self.lbl_post.setText("POST: выкл")
+            self.lbl_post.setStyleSheet("")
+        else:
+            info = f"POST: {rep.sent}"
+            if rep.failed:
+                info += f"/ошибок: {rep.failed}"
+                self.lbl_post.setStyleSheet("color: #d9534f;")
+            else:
+                self.lbl_post.setStyleSheet("color: #5cb85c;")
+            self.lbl_post.setText(info)
 
     def on_worker_error(self, message):
         self.statusBar().showMessage(f"Ошибка: {message}", 10000)
@@ -511,6 +551,15 @@ class MainWindow(QMainWindow):
         self.act_roi_enabled.setChecked(roi_on)
         if self.worker is not None:
             self.worker.roi_enabled = roi_on
+        if self.worker is not None:
+            post_url = str(self.config.get("post_url") or "").strip()
+            if self.config.get("post_enabled") and post_url:
+                if self.worker.reporter is None:
+                    self.worker.reporter = ga.GestureReporter(post_url)
+                else:
+                    self.worker.reporter.set_url(post_url)
+            else:
+                self.worker.reporter = None
         self.mute_gate.delay = self.config["delay"]
         self.media_gate.delay = self.config["delay"]
         self.volume_gate.delay = self.config["delay"]
@@ -573,7 +622,9 @@ class MainWindow(QMainWindow):
             "Указательный - следующий трек\n"
             "Победа (V) - предыдущий трек\n"
             "Коза - Play/Pause\n\n"
-            "Медиа-клавиши работают глобально, плеер может быть в фоне.\n"
+            "Медиа-клавиши работают глобально, плеер может быть в фоне.\n\n"
+            "POST-отправка распознанных жестов в JSON настраивается\n"
+            "в «Настройки» → «Параметры…» (URL и включение).\n\n"
             "Команды работают только с руками в зоне распознавания (если она задана).",
         )
 

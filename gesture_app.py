@@ -1,10 +1,13 @@
 ﻿import os
 import time
 import math
+import json
 import argparse
 import ctypes
+import threading
 import urllib.request
 from collections import deque, Counter
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -25,7 +28,7 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 MODEL_PATH = "hand_landmarker.task"
 MODEL_URL = (
@@ -121,6 +124,76 @@ class KeyController:
         flags = self.KEYEVENTF_EXTENDEDKEY if 0xAD <= vk <= 0xB2 else 0
         self.user32.keybd_event(vk, 0, flags, 0)
         self.user32.keybd_event(vk, 0, flags | self.KEYEVENTF_KEYUP, 0)
+
+
+class GestureReporter:
+    def __init__(self, url, timeout=1.5, min_interval=0.2):
+        self.url = url
+        self.timeout = timeout
+        self.min_interval = min_interval
+        self.enabled = True
+        self.sent = 0
+        self.failed = 0
+        self.last_error = None
+        self._last_key = None
+        self._last_send = 0.0
+        self._lock = threading.Lock()
+
+    def set_url(self, url):
+        self.url = url
+        self._last_key = None
+
+    def make_key(self, hands):
+        return tuple(
+            (h["hand"], h["gesture"], round(h["x"], 3), round(h["y"], 3))
+            for h in hands
+        )
+
+    def update(self, hands, fps):
+        if not self.enabled or not self.url:
+            return False
+        key = self.make_key(hands)
+        now = time.monotonic()
+        if key == self._last_key:
+            return False
+        if now - self._last_send < self.min_interval:
+            return False
+        if not self._lock.acquire(blocking=False):
+            return False
+        self._last_key = key
+        self._last_send = now
+        payload = {
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "fps": round(float(fps), 1),
+            "hands": [
+                {
+                    "side": h["hand"],
+                    "gesture": h["gesture"],
+                    "x": round(float(h["x"]), 3),
+                    "y": round(float(h["y"]), 3),
+                }
+                for h in hands
+            ],
+        }
+        threading.Thread(target=self._post, args=(payload,), daemon=True).start()
+        return True
+
+    def _post(self, payload):
+        try:
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            request = urllib.request.Request(
+                self.url,
+                data=data,
+                headers={"Content-Type": "application/json; charset=utf-8"},
+            )
+            urllib.request.urlopen(request, timeout=self.timeout).close()
+            self.sent += 1
+            self.last_error = None
+        except Exception as e:
+            self.failed += 1
+            self.last_error = str(e)
+        finally:
+            self._lock.release()
 
 
 class ActionGate:
@@ -302,6 +375,8 @@ class GestureRecognizer:
                         "gesture": stable or raw,
                         "stable": stable,
                         "fingers": fingers,
+                        "x": lms[0].x,
+                        "y": lms[0].y,
                     }
                 )
 
@@ -355,6 +430,11 @@ def parse_args():
         help="Шаг изменения громкости в процентах (по умолчанию: 10)"
     )
     parser.add_argument(
+        "--post-url", default="",
+        help="URL для POST-отправки распознанных жестов в JSON "
+             "(например, http://192.168.1.10:8080/report)"
+    )
+    parser.add_argument(
         "--version", action="version",
         version=f"Жесты рук v{APP_VERSION}"
     )
@@ -385,6 +465,8 @@ def main():
     media_gate = ActionGate(args.delay)
     volume_gate = ActionGate(args.delay)
 
+    reporter = GestureReporter(args.post_url) if args.post_url else None
+
     cap = cv2.VideoCapture(args.camera, cv2.CAP_DSHOW)
     if not cap.isOpened():
         cap = cv2.VideoCapture(args.camera)
@@ -397,10 +479,12 @@ def main():
     prev_time = time.time()
     fps_smooth = 0.0
     print("Управление: Кулак - звук выкл, Ладонь - звук вкл,")
-    print("Указательный - след. трек (N), Победа (V) - пред. трек (P),")
+    print("Указательный - след. трек, Победа (V) - пред. трек, Коза - Play/Pause,")
     print(
         f"Большой палец вверх/вниз - громкость +{args.volume_step:g}%/-{args.volume_step:g}%."
     )
+    if reporter is not None:
+        print(f"POST-отправка жестов: {args.post_url}")
     if args.delay > 0:
         print(f"Задержка срабатывания: {args.delay:g} с.")
     print("Распознавание жестов запущено. Нажмите Q в окне для выхода.")
@@ -418,6 +502,9 @@ def main():
         fps = 1.0 / (now - prev_time) if now > prev_time else 0.0
         prev_time = now
         fps_smooth = fps if fps_smooth == 0 else fps_smooth * 0.9 + fps * 0.1
+
+        if reporter is not None:
+            reporter.update(hands_info, fps_smooth)
 
         gestures = [info["stable"] for info in hands_info]
 
