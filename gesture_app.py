@@ -28,7 +28,7 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 
 MODEL_PATH = "hand_landmarker.task"
 MODEL_URL = (
