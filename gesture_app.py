@@ -25,7 +25,7 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 
 MODEL_PATH = "hand_landmarker.task"
 MODEL_URL = (
@@ -62,9 +62,17 @@ GESTURE_TABLE = {
     (1, 1, 1, 1, 0): "Четыре (с большим)",
 }
 
+VK_VOLUME_MUTE = 0xAD
+VK_VOLUME_DOWN = 0xAE
+VK_VOLUME_UP = 0xAF
+VK_MEDIA_NEXT_TRACK = 0xB0
+VK_MEDIA_PREV_TRACK = 0xB1
+VK_MEDIA_PLAY_PAUSE = 0xB3
+
 GESTURE_ACTIONS = {
-    "Указательный": ("n", "Следующий трек"),
-    "Победа (V)": ("p", "Предыдущий трек"),
+    "Указательный": (VK_MEDIA_NEXT_TRACK, "Следующий трек"),
+    "Победа (V)": (VK_MEDIA_PREV_TRACK, "Предыдущий трек"),
+    "Коза": (VK_MEDIA_PLAY_PAUSE, "Play/Pause"),
 }
 
 _font_cache = {}
@@ -101,17 +109,18 @@ def angle_at(p1, p2, p3):
     cos_a = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)))
     return math.degrees(math.acos(cos_a))
 
-
 class KeyController:
+
     KEYEVENTF_KEYUP = 2
+    KEYEVENTF_EXTENDEDKEY = 1
 
     def __init__(self):
         self.user32 = ctypes.windll.user32
 
-    def press(self, key):
-        vk = ord(key.upper())
-        self.user32.keybd_event(vk, 0, 0, 0)
-        self.user32.keybd_event(vk, 0, self.KEYEVENTF_KEYUP, 0)
+    def press(self, vk):
+        flags = self.KEYEVENTF_EXTENDEDKEY if 0xAD <= vk <= 0xB2 else 0
+        self.user32.keybd_event(vk, 0, flags, 0)
+        self.user32.keybd_event(vk, 0, flags | self.KEYEVENTF_KEYUP, 0)
 
 
 class ActionGate:
