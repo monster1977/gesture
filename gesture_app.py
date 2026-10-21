@@ -29,7 +29,7 @@ try:
 except ImportError:
     PYCAW_AVAILABLE = False
 
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 
 MODEL_PATH = "hand_landmarker.task"
 MODEL_URL = (
@@ -140,18 +140,22 @@ ALL_GESTURES = tuple(GESTURE_TABLE.values()) + (
     "Кулак",
     "Большой палец вверх",
     "Большой палец вниз",
+    "Большой палец (вбок)",
     "OK",
 )
 
 
 def parse_action(spec):
     kind, _, rest = str(spec).partition(":")
-    if kind == "audio":
-        return ("audio", rest)
-    if kind == "key":
-        return ("key", int(rest, 0))
-    if kind == "combo":
-        return ("combo", tuple(int(p, 0) for p in rest.split(",")))
+    try:
+        if kind == "audio":
+            return ("audio", rest)
+        if kind == "key":
+            return ("key", int(rest, 0))
+        if kind == "combo":
+            return ("combo", tuple(int(p, 0) for p in rest.split(",")))
+    except (TypeError, ValueError):
+        return None
     return None
 
 

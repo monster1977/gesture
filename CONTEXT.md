@@ -1,6 +1,6 @@
 # Жесты рук — контекст проекта
 
-Версия: **1.8.0** (тег `v1.8.0`)
+Версия: **1.8.1** (тег `v1.8.1`)
 
 ## Назначение
 Управление звуком и медиа на Windows жестами руки перед веб-камерой: распознавание через MediaPipe HandLandmarker, действия через pycaw (звук) и keybd_event (клавиши плеера). Две версии: консольная (`gesture_app.py`) и оконная на PySide6 (`gesture_qt.py`).
@@ -37,6 +37,8 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 
 Зарезервированные жесты (распознаются, команды по умолчанию нет): Буква L, Три пальца, Shaka, Мизинец, Коза (ILY) — список в `RESERVED_GESTURES`.
 
+Привязки хранятся в config так: `bindings` отсутствует/`null` → дефолтные (`DEFAULT_BINDINGS`), `{}` → «без команд» (пустой набор сохраняется и не подменяется дефолтными при следующем запуске).
+
 Медиа-клавиши (VK 0xB0/0xB1/0xB3, отправка с KEYEVENTF_EXTENDEDKEY) глобальные — плеер может быть в фоне. Mute/громкость — через pycaw на все устройства вывода. Сглаживание: deque 8 кадров, минимум 3 совпадения.
 
 ## Зона распознавания (GUI)
@@ -54,7 +56,7 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 
 ## Архитектура
 - `gesture_app.py` — ядро: `GestureRecognizer` (MediaPipe VIDEO-режим, `draw_texts` через PIL/arial.ttf для кириллицы), `HandAnalyzer` (`fingers_state`, `classify`, `stable_gesture`), `ActionGate` (задержка срабатывания), `AudioController` (pycaw; mute/volume на ВСЕ активные устройства вывода; кэш 2 с), `KeyController` (`keybd_event`: `press` — одиночная VK (медиа/браузерные 0xA6..0xB5 с KEYEVENTF_EXTENDEDKEY), `combo` — Win+клавиши, `execute` — низкоуровневый диспетчер), `GestureReporter` (фоновая POST-отправка JSON: дедуп по набору жестов, троттлинг, счётчики sent/failed), `detect_cameras` (перебор индексов 0..5 через CAP_DSHOW с проверкой кадра), `COMMAND_CATALOG`/`DEFAULT_BINDINGS`/`ALL_GESTURES`, `parse_action`/`match_binding`/`execute_action`, `parse_args`.
-- `gesture_qt.py` — GUI: `VideoWorker(QThread)` — камера (CAP_DSHOW с fallback, 1280x720, зеркалит кадр), распознавание, ROI-фильтр и затемнение, репортер, сигнал `stateReady`; `VideoLabel` — отображение и выбор зоны мышью (`QRubberBand`, нормализованные координаты); `MainWindow` — меню (Настройки/Зона/Справка), единый `action_gate` + `self.bindings`, статусбар (FPS, звук, громкость, POST, руки); `SettingsDialog` — параметры (камера — комбобокс из реально обнаруженных, руки, задержка, шаг громкости, зона, URL POST, команды системе, таблица «Жесты и действия» с каталогом команд и вводом VK-кода).
+- `gesture_qt.py` — GUI: `VideoWorker(QThread)` — камера (CAP_DSHOW с fallback, 1280x720, зеркалит кадр), распознавание, ROI-фильтр и затемнение, репортер, сигнал `stateReady`; `CameraDetectWorker(QThread)` — поиск камер в фоне (окно не блокируется); `VideoLabel` — отображение и выбор зоны мышью (`QRubberBand`, нормализованные координаты); `MainWindow` — меню (Настройки/Зона/Справка), единый `action_gate` + `self.bindings`, статусбар (FPS, звук, громкость, POST, руки); `open_settings` → `CameraDetectWorker` → `_on_cameras_detected` → `SettingsDialog` → `apply_settings`; `SettingsDialog` — параметры (камера — комбобокс из реально обнаруженных, руки, задержка, шаг громкости, зона, URL POST, команды системе, таблица «Жесты и действия» с каталогом команд и вводом VK-кода).
 
 ## История версий
 - **1.0.0** — консольная версия: распознавание жестов, mute/unmute всех устройств, громкость, медиа-клавиши N/P.
@@ -69,6 +71,7 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 - **1.7.0** — отключение команд системе: галочка «Отправлять командам системе» в «Параметрах» (config `actions_enabled`) и флаг `--no-actions` в консоли; при отключении выполняются только распознавание и POST-отправка, таймеры задержек сбрасываются.
 - **1.7.1** — зарезервированные жесты без команд: `RESERVED_GESTURES` (Буква L, Три пальца, Shaka, Мизинец, Коза (ILY), OK); отображаются в справке, распознаются и уходят в POST; действий пока нет.
 - **1.8.0** — настраиваемые привязки «жест → действие»: таблица в «Параметрах» для всех распознаваемых жестов (включая Кулак, большой палец, OK — добавлены в `ALL_GESTURES`), каталог команд (`COMMAND_CATALOG`: pycaw-звук, медиа/браузер VK, Win+D) и произвольный VK-код (hex/десятичный, одиночная или Win+клавиша); привязки в config (`bindings`), единый `ActionGate` вместо трёх, справка строится динамически; `GESTURE_ACTIONS` удалён (заменён на `DEFAULT_BINDINGS` + `parse_action`/`match_binding`/`execute_action`).
+- **1.8.1** — исправления после 1.8.0: (1) в `open_settings` остались ссылки на удалённые в 1.8.0 гейты `mute_gate`/`media_gate`/`volume_gate` → `AttributeError` при нажатии «ОК» в «Параметрах» (приложение падало); теперь обновляется единый `action_gate.delay`; (2) `parse_action` больше не падает на битой спецификации (try/except → `None`); (3) пустой набор привязок (`bindings: {}`) больше не подменяется дефолтными при следующем открытии «Параметров» (в config `bindings: null` = «не задано»); (4) список «Своя: …» в комбобоксе больше не разрастается, отмена ввода VK-кода возвращает прежнюю привязку; (5) жест «Большой палец (вбок)» добавлен в `ALL_GESTURES` — ему можно назначить действие; (6) поиск камер вынесен в фоновый поток (`CameraDetectWorker`) — окно не подвисает; применение настроек вынесено в `MainWindow.apply_settings`.
 
 ## Важные особенности (грабли)
 - НЕ править исходники через PowerShell (`Get-Content`/`Set-Content`/`-replace`): перекодирует UTF-8 в cp1251, кириллица ломается. Только инструменты Edit/Write.
@@ -81,6 +84,10 @@ python -m PyInstaller --noconfirm --clean --onefile --noconsole --icon "icon.ico
 `python test_zone_flow.py` — offscreen-тест: симуляция выбора зоны мышью (press/move/release), математика координат, сохранение конфига, тумблер и сброс зоны, работа ROI в `_process_frame`.
 
 `python test_reporter.py` — тест POST-отправки на локальном HTTP-сервере: формат JSON, дедупликация, пустое событие, вкл/выкл, счётчик ошибок при недостижимом URL.
+
+`python test_actions.py` — разбор и исполнение привязок: `parse_action` (в т.ч. битые спецификации), `match_binding`, `execute_action` (аудио/ключ/combo), состав `ALL_GESTURES`/`RESERVED_GESTURES`/`DEFAULT_BINDINGS`.
+
+`python test_settings.py` — offscreen-тест «Параметров»: применение настроек без падения (`apply_settings`, обновление `action_gate.delay`), семантика `bindings` (`null` = дефолт, `{}` = без команд), список «Своя: …» не разрастается, отмена ввода VK-кода возвращает прежнюю привязку.
 
 ## Не входит в проект
 `C:\i` содержит посторонние файлы (`timer*.html`, `findbook.py`, `testlm.py`) — оставлены на месте.

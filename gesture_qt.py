@@ -52,7 +52,9 @@ DEFAULT_CONFIG = {
     "post_url": "",
     "post_enabled": False,
     "actions_enabled": True,
-    "bindings": {},
+    # None = привязки не заданы (используются DEFAULT_BINDINGS),
+    # {} = явно «без команд»
+    "bindings": None,
 }
 
 
@@ -229,6 +231,19 @@ class VideoWorker(QThread):
         return frame, hands_info, fps
 
 
+class CameraDetectWorker(QThread):
+    """Поиск камер в фоновом потоке, чтобы не блокировать окно."""
+
+    resultReady = Signal(object)
+
+    def run(self):
+        try:
+            cameras = ga.detect_cameras()
+        except Exception:
+            cameras = []
+        self.resultReady.emit(cameras)
+
+
 class VideoLabel(QLabel):
     zoneSelected = Signal(float, float, float, float)
 
@@ -320,7 +335,9 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Параметры")
         self.config = dict(config)
-        self.bindings = dict(bindings) if bindings else dict(ga.DEFAULT_BINDINGS)
+        self.bindings = (
+            dict(bindings) if bindings is not None else dict(ga.DEFAULT_BINDINGS)
+        )
 
         self.combo_camera = QComboBox()
         cam_list = list(cameras) if cameras else list(range(10))
@@ -414,12 +431,22 @@ class SettingsDialog(QDialog):
             combo.addItem(label, spec)
         combo.addItem("Своя клавиша (VK)…", self.CUSTOM_KEY)
         combo.addItem("Win + клавиша (VK)…", self.CUSTOM_WIN)
+        combo.setProperty("baseItemCount", combo.count())
         spec = self.bindings.get(gesture, "")
         self._select_spec(combo, spec)
         combo.currentIndexChanged.connect(
             lambda _ix, cb=combo, g=gesture: self._on_action_selected(cb, g)
         )
         return combo
+
+    @staticmethod
+    def _remove_custom_items(combo):
+        """Убрать динамические пункты «Своя: …», чтобы список не разрастался."""
+        base = int(combo.property("baseItemCount") or 0)
+        combo.blockSignals(True)
+        for index in range(combo.count() - 1, base - 1, -1):
+            combo.removeItem(index)
+        combo.blockSignals(False)
 
     @staticmethod
     def _select_spec(combo, spec):
@@ -438,9 +465,11 @@ class SettingsDialog(QDialog):
     def _on_action_selected(self, combo, gesture):
         data = combo.currentData()
         if data in (None, ""):
+            self._remove_custom_items(combo)
             self.bindings.pop(gesture, None)
             return
         if data in (self.CUSTOM_KEY, self.CUSTOM_WIN):
+            previous = self.bindings.get(gesture, "")
             title = (
                 "Своя клавиша: VK-код"
                 if data == self.CUSTOM_KEY
@@ -460,12 +489,21 @@ class SettingsDialog(QDialog):
                     spec = (
                         f"key:{vk}" if data == self.CUSTOM_KEY else f"combo:{vk}"
                     )
+            self._remove_custom_items(combo)
             if spec:
                 self.bindings[gesture] = spec
-            else:
+            elif ok:
                 self.bindings.pop(gesture, None)
+            else:
+                # отмена ввода — возвращаем прежнюю привязку
+                spec = previous
+                if spec:
+                    self.bindings[gesture] = spec
+                else:
+                    self.bindings.pop(gesture, None)
             self._select_spec(combo, spec)
             return
+        self._remove_custom_items(combo)
         self.bindings[gesture] = data
 
     def result_config(self):
@@ -500,7 +538,9 @@ class MainWindow(QMainWindow):
         self.actions_enabled = bool(self.config.get("actions_enabled", True))
         saved_bindings = self.config.get("bindings")
         self.bindings = (
-            dict(saved_bindings) if saved_bindings else dict(ga.DEFAULT_BINDINGS)
+            dict(saved_bindings)
+            if saved_bindings is not None
+            else dict(ga.DEFAULT_BINDINGS)
         )
 
         self.video = VideoLabel()
@@ -511,6 +551,7 @@ class MainWindow(QMainWindow):
         self._build_statusbar()
 
         self.worker = None
+        self._cam_thread = None
         self.start_worker()
 
     def _build_menus(self):
@@ -638,14 +679,26 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Ошибка", message)
 
     def open_settings(self):
+        if self._cam_thread is not None:
+            self.statusBar().showMessage("Поиск камер уже выполняется…")
+            return
         self.statusBar().showMessage("Поиск камер…")
-        QApplication.processEvents()
-        cameras = ga.detect_cameras()
+        self._cam_thread = CameraDetectWorker(self)
+        self._cam_thread.resultReady.connect(self._on_cameras_detected)
+        self._cam_thread.start()
+
+    def _on_cameras_detected(self, cameras):
+        thread = self._cam_thread
+        self._cam_thread = None
+        if thread is not None:
+            thread.deleteLater()
         self.statusBar().clearMessage()
         dialog = SettingsDialog(self.config, self, cameras, self.bindings)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        new_cfg = dialog.result_config()
+        self.apply_settings(dialog.result_config())
+
+    def apply_settings(self, new_cfg):
         restart = (
             new_cfg["camera"] != self.config["camera"]
             or new_cfg["hands"] != self.config["hands"]
@@ -667,9 +720,7 @@ class MainWindow(QMainWindow):
                     self.worker.reporter.set_url(post_url)
             else:
                 self.worker.reporter = None
-        self.mute_gate.delay = self.config["delay"]
-        self.media_gate.delay = self.config["delay"]
-        self.volume_gate.delay = self.config["delay"]
+        self.action_gate.delay = float(self.config["delay"])
         self.save()
         if restart:
             self.start_worker()
@@ -756,6 +807,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self.worker is not None:
             self.worker.stop()
+        if self._cam_thread is not None:
+            self._cam_thread.wait(3000)
         super().closeEvent(event)
 
 
